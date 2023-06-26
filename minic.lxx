@@ -1,0 +1,56 @@
+/*
+ * minic.lxx
+ * lex program for the miniC project
+ *
+ * William Dinauer, Dartmouth CS57 Spring 2022
+ *
+ */
+
+%{
+    #include <iostream>
+    #include <sstream>
+    #include <string>
+   
+    #include "ast.hpp"
+    #include "minic.tab.hxx"
+
+    int yyerror(char const*);
+%}
+
+%option noyywrap
+
+%%
+
+"if"                    return if_stmt;
+"else"                  return else_stmt;
+"while"                 return while_stmt;
+"void"                  return void_stmt;
+"int"                   return int_stmt;
+"extern"                return ext;
+"return"                return ret;
+
+[{}()=;/\-*+]            return yytext[0];
+
+"=="                    return eq;
+"<="                    return le;
+">="                    return ge;
+"!="                    return ne;
+">"                     return gt;
+"<"                     return lt;
+
+[0-9]+                  {std::stringstream ss;
+                         ss << yytext;
+                         ss >> yylval.num;
+                         return i;}
+
+[a-zA-Z][a-zA-Z0-9_]*   {yylval.str = new std::string(yytext, yyleng); return identifier;}
+[ \t\n]+                ;
+.                       {printf("bad token: %s\n", yytext); return bad;}
+
+%%
+
+int yyerror(char const* e) {
+    std::cout << e << std::endl;
+    exit(1);
+    return 1;
+}

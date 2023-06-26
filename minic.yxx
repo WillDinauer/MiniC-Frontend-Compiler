@@ -1,0 +1,248 @@
+/* 
+ * minic.yxx
+ * yacc program for the miniC project
+ * 
+ * William Dinauer, Dartmouth CS57 Spring 2022
+ */
+
+%{
+    #include <set>
+    #include <stdio.h>
+    #include <unistd.h>
+    #include <iostream>
+    #include <string>
+    #include <vector>
+
+    #include "ast.hpp"    
+
+    void yyerror(char const*);
+    void useError(std::string var);
+    void doubleError(std::string var);
+    int yylex();
+    
+    ASTRootNode* ast = nullptr;
+    std::set<std::string> decSet;
+    std::set<std::string> useSet;
+%}
+
+%union {
+    int                             num;
+    std::string*                    str;
+    r_op_t                          r_operator;
+    data_type_t                     dt;    
+    ASTFuncDefNode*                 fd_node;
+    ASTBlockNode*                   b_node;
+    ASTAsgnNode*                    a_node;
+    ASTStmtNode*                    s_node;
+    ASTCallNode*                    c_node;
+    ASTRootNode*                    r_node;
+    ASTRetNode*                     ret_node;
+    ASTVarDeclNode*                 vd_node;
+    ASTExprNode*                    ex_node;
+    ASTFuncDeclNode*                fdecl_node;
+    ASTUExprNode*                   ux_node;
+    ASTBExprNode*                   bx_node;
+    ASTRExprNode*                   rx_node;
+    std::vector<ASTDeclNode*>*      decl_nodes;
+    std::vector<ASTFuncDefNode*>*   fd_nodes;
+    std::vector<ASTStmtNode*>*      s_nodes;
+}
+
+%token if_stmt else_stmt while_stmt void_stmt int_stmt ext ret
+%token eq le ge ne gt lt i bad identifier
+
+%left eq
+%left ne
+%left ge
+%left le
+%left lt
+%left gt
+%left '-'
+%left '+'
+%left '*'
+%left '/'
+
+%start              start
+%type <r_operator>  comp
+%type <str>         word
+%type <fd_nodes>    methods
+%type <fd_node>     method
+%type <b_node>      block empty_block block_stmt
+%type <dt>          d_type
+%type <s_nodes>     function_body stmts var_decl 
+%type <s_node>      stmt
+%type <ret_node>    return_stmt
+%type <vd_node>     int_decl
+%type <ex_node>     expr exp_val
+%type <ux_node>     u_exp
+%type <bx_node>     b_exp
+%type <rx_node>     r_exp
+%type <c_node>      func_call
+%type <a_node>      int_set
+%type <num>         integer
+%type <fdecl_node>  header
+%type <decl_nodes>  headers
+
+
+
+%%
+
+start   : headers methods {ast = new ASTRootNode($1, nullptr, $2);} 
+        | methods         {ast = new ASTRootNode(nullptr, nullptr, $1);}
+        ;
+
+headers : headers header {$1->push_back($2); $$ = $1;}
+        | header         {$$ = new std::vector<ASTDeclNode*>({$1});}
+        ;
+
+header  : ext d_type word '(' d_type ')' ';'   {$$ = new ASTFuncDeclNode(true, $2, $3, $5);}
+        | d_type word '(' d_type ')' ';'       {$$ = new ASTFuncDeclNode(false, $1, $2, $4);}
+        ;
+
+d_type  : void_stmt     {$$ = VOID_T;}
+        | int_stmt      {$$ = INT_T;}
+        ;
+
+methods : method            {$$ = new std::vector<ASTFuncDefNode*>({$1});}
+        | methods method    {$1->push_back($2); $$ = $1;}
+        ;
+
+method  : d_type word '(' d_type word ')' block {
+            $$ = new ASTFuncDefNode($1, $2, $4, $5, $7);
+            if (decSet.find(*$5) != decSet.end()) {
+                doubleError(*$5);
+            }
+            for (std::set<std::string>::iterator itr = useSet.begin(); itr != useSet.end(); itr++) { 
+                if (decSet.find(*itr) == decSet.end() && *itr != *$5) {
+                    useError(*itr);
+                }
+            }
+            decSet.clear();
+            useSet.clear();
+        }
+        | d_type word '(' d_type ')' block     {$$ = new ASTFuncDefNode($1, $2, $4, nullptr, $6);}
+        ;
+
+block   : empty_block   {$$ = $1;}
+        | '{' function_body '}' {$$ = new ASTBlockNode($2);}
+        ;
+
+empty_block : '{' '}' {$$ = new ASTBlockNode({});};
+
+function_body   : var_decl stmts {$1->insert($1->end(), $2->begin(), $2->end()); $$ = $1;}
+                | var_decl       {$$ = $1;}
+                | stmts          {$$ = $1;}
+                ;
+
+return_stmt : ret ';'              {$$ = new ASTRetNode({});}
+            | ret expr ';'        {$$ = new ASTRetNode($2);}
+            ;
+
+stmts   : stmts stmt {$1->push_back($2); $$ = $1;}
+        | stmt       {$$ = new std::vector<ASTStmtNode*>({$1});}
+        ;
+
+stmt    : int_set       {$$ = $1;}
+        | func_call ';' {$$ = $1;}
+        | return_stmt   {$$ = $1;}
+        | ';'           {$$ = new ASTEmptyStmtNode();}
+        | if_stmt '(' r_exp ')' block_stmt {$$ = new ASTIfNode($3, $5, nullptr);}
+        | if_stmt '(' r_exp ')' block_stmt else_stmt block_stmt {$$ = new ASTIfNode($3, $5, $7);}
+        | while_stmt '(' r_exp ')' block_stmt {$$ = new ASTWhileNode($3, $5);}
+        | block_stmt    {$$ = $1;};
+        ;
+
+block_stmt  : empty_block {$$ = $1;};
+            | '{' stmts '}' {$$ = new ASTBlockNode($2);}
+            ;
+
+var_decl    : var_decl int_decl {$1->push_back($2); $$ = $1;}
+            | int_decl          {$$ = new std::vector<ASTStmtNode*>({$1});}
+            ;
+
+int_decl: d_type word ';'     {
+            $$ = new ASTVarDeclNode(false, $1, $2);
+            if (decSet.find(*$2) != decSet.end()) {
+                doubleError(*$2);
+            } else {
+                decSet.insert(*$2);
+            } 
+        }
+        | ext d_type word ';' {
+            $$ = new ASTVarDeclNode(true, $2, $3);
+            if (decSet.find(*$3) != decSet.end()) {
+                doubleError(*$3);
+            } else {
+                decSet.insert(*$3);
+            }
+        };
+
+int_set : word '=' expr ';' {
+            $$ = new ASTAsgnNode($1, $3);
+            useSet.insert(*$1);
+        }; 
+
+func_call : word '(' ')'        {$$ = new ASTCallNode($1, nullptr);}
+          | word '(' expr ')'   {$$ = new ASTCallNode($1, $3);}
+          ;
+
+u_exp   : exp_val {$$ = new ASTUExprNode($1, POS);}
+        | '-' expr {$$ = new ASTUExprNode($2, NEG);}
+        | '+' expr {$$ = new ASTUExprNode($2, POS);}
+        ;
+
+exp_val : integer {$$ = new ASTIntLiteralNode($1);}
+        | word {
+            $$ = new ASTVarNode($1);
+            useSet.insert(*$1);
+        }
+        | func_call {$$ = $1;}
+        ;
+
+b_exp   : expr '-' expr {$$ = new ASTBExprNode($1, $3, SUB);}
+        | expr '+' expr {$$ = new ASTBExprNode($1, $3, ADD);}
+        | expr '/' expr {$$ = new ASTBExprNode($1, $3, DIV);}
+        | expr '*' expr {$$ = new ASTBExprNode($1, $3, MUL);}
+        ;
+
+word    : identifier {$$ = yylval.str;};
+
+integer : i {$$ = yylval.num;};
+
+r_exp   : expr comp expr {$$ = new ASTRExprNode($1, $3, $2);};
+
+expr    : b_exp {$$ = $1;}
+        | u_exp {$$ = $1;}
+        | '(' expr ')' {$$ = $2;}
+        ;
+
+comp    : eq {$$ = EQ;}
+        | le {$$ = LEQ;}
+        | ge {$$ = GEQ;}
+        | ne {$$ = NEQ;}
+        | gt {$$ = GT;}
+        | lt {$$ = LT;}
+        ; 
+
+%%
+
+int main(void) {
+    yyparse();
+    ast->print();
+    delete ast;
+    return 0;
+}
+
+void useError(std::string var) {
+    std::string s1 = "Syntactical error: '";
+    std::string s2 = "' used but never defined";
+    std::string s = s1 + var + s2;
+    printf("%s\n", s.c_str());
+}
+
+void doubleError(std::string var) {
+    std::string s1 = "Syntactical error: '";
+    std::string s2 = "' defined twice";
+    std::string s = s1 + var + s2;
+    printf("%s\n", s.c_str());
+}

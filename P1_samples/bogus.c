@@ -1,0 +1,4 @@
+int bogus (int a)
+{
+}
+
